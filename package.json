@@ -1,5 +1,5 @@
 {
-  "name": "serverless-esbuild",
+  "name": "@mazeapp/serverless-esbuild",
   "description": "Serverless plugin for zero-config JavaScript and TypeScript code bundling using extremely fast esbuild",
   "version": "0.0.0-development",
   "license": "MIT",
@@ -22,7 +22,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/floydspace/serverless-esbuild.git"
+    "url": "https://github.com/mazedesignhq/serverless-esbuild.git"
   },
   "bugs": {
     "url": "https://github.com/floydspace/serverless-esbuild/issues"

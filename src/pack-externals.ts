@@ -279,12 +279,6 @@ export async function packExternalModules(this: EsbuildServerlessPlugin) {
     getProdModules.call(this, externalModules, packageJsonPath, rootPackageJsonPath)
   );
 
-  if (isEmpty(compositeModules)) {
-    // The compiled code does not reference any external modules at all
-    this.log.warning('No external modules needed');
-    return;
-  }
-
   // (1.a) Install all needed modules
   const compositeModulePath = this.buildDirPath;
   const compositePackageJson = path.join(compositeModulePath, 'package.json');

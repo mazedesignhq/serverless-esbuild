@@ -1,5 +1,7 @@
-import { BuildOptions, BuildResult, Plugin } from 'esbuild';
-import Serverless from 'serverless';
+import type { BuildOptions, BuildResult, Plugin } from 'esbuild';
+import type Serverless from 'serverless';
+
+export type ConfigFn = (sls: Serverless) => Configuration;
 
 export type Plugins = Plugin[];
 export type ReturnPluginsFn = (sls: Serverless) => Plugins;
@@ -11,30 +13,55 @@ export interface WatchConfiguration {
 
 export interface PackagerOptions {
   scripts?: string[] | string;
+  noInstall?: boolean;
 }
 
-export interface Configuration extends Omit<BuildOptions, 'nativeZip' | 'watch' | 'plugins'> {
+interface NodeExternalsOptions {
+  allowList?: string[];
+}
+
+export type EsbuildOptions = Omit<BuildOptions, 'watch' | 'plugins'>;
+
+export interface Configuration extends EsbuildOptions {
   concurrency?: number;
-  packager: 'npm' | 'yarn';
+  packager: PackagerId;
+  packagerOptions: PackagerOptions;
   packagePath: string;
   exclude: '*' | string[];
   nativeZip: boolean;
   watch: WatchConfiguration;
   installExtraArgs: string[];
-  plugins?: string;
+  plugins?: string | Plugin[];
   keepOutputDirectory?: boolean;
-  packagerOptions?: PackagerOptions;
   disableIncremental?: boolean;
+  outputWorkFolder?: string;
+  outputBuildFolder?: string;
+  outputFileExtension: '.js' | '.cjs' | '.mjs';
+  nodeExternals?: NodeExternalsOptions;
+}
+
+export interface EsbuildFunctionDefinitionHandler extends Serverless.FunctionDefinitionHandler {
+  skipEsbuild: boolean;
+}
+
+export interface FunctionEntry {
+  entry: string;
+  func: Serverless.FunctionDefinitionHandler | null;
+  functionAlias?: string;
 }
 
 export interface FunctionBuildResult {
-  result: BuildResult;
   bundlePath: string;
   func: Serverless.FunctionDefinitionHandler;
   functionAlias: string;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export interface FileBuildResult {
+  bundlePath: string;
+  entry: string;
+  result: BuildResult;
+}
+
 export type JSONObject = any;
 
 export interface DependenciesResult {
@@ -56,3 +83,14 @@ export interface IFile {
   readonly rootPath: string;
 }
 export type IFiles = readonly IFile[];
+
+export type PackagerId = 'npm' | 'pnpm' | 'yarn';
+
+export type PackageJSON = {
+  name: string;
+  version: string;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  [key: string]: unknown;
+};

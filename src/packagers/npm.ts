@@ -1,9 +1,10 @@
 import { any, isEmpty, replace, split, startsWith, takeWhile } from 'ramda';
 import * as path from 'path';
 
-import { DependenciesResult, DependencyMap, JSONObject } from '../types';
+import type { DependenciesResult, DependencyMap, JSONObject } from '../types';
 import { SpawnError, spawnProcess } from '../utils';
-import { Packager } from './packager';
+import type { Packager } from './packager';
+import { isString } from '../helper';
 
 type NpmV7Map = Record<string, NpmV7Tree>;
 
@@ -107,21 +108,35 @@ export class NPM implements Packager {
 
     const processOutput = await spawnProcess(command, args, { cwd });
     const version = processOutput.stdout.trim();
-    return parseInt(version.split('.')[0]);
+
+    const [major] = version.split('.');
+
+    if (major) {
+      return parseInt(major, 10);
+    }
+
+    throw new Error('Unable to get major npm version');
   }
 
   async getProdDependencies(cwd: string, depth?: number): Promise<DependenciesResult> {
+    const npmMajorVersion = await this.getNpmMajorVersion(cwd);
+    const prodFlag = npmMajorVersion >= 7 ? '--omit=dev' : '-prod';
+    const noDepthFlag = npmMajorVersion >= 7 ? '-all' : null;
+
     // Get first level dependency graph
     const command = /^win/.test(process.platform) ? 'npm.cmd' : 'npm';
     const args = [
       'ls',
       '-json',
-      '-prod', // Only prod dependencies
+      prodFlag, // Only prod dependencies
       '-long',
-      depth ? `-depth=${depth}` : (await this.getNpmMajorVersion(cwd)) >= 7 ? '-all' : null,
-    ].filter(Boolean);
+      depth ? `-depth=${depth}` : noDepthFlag,
+    ].filter(isString);
 
-    const ignoredNpmErrors = [
+    const ignoredNpmErrors: Array<{
+      npmError: string;
+      log: boolean;
+    }> = [
       { npmError: 'extraneous', log: false },
       { npmError: 'missing', log: false },
       { npmError: 'peer dep missing', log: true },
@@ -129,13 +144,15 @@ export class NPM implements Packager {
     ];
 
     let parsedDeps: NpmV6Deps | NpmV7Deps;
+
     try {
       const processOutput = await spawnProcess(command, args, { cwd });
+
       parsedDeps = JSON.parse(processOutput.stdout) as NpmV6Deps | NpmV7Deps;
     } catch (err) {
       if (err instanceof SpawnError) {
         // Only exit with an error if we have critical npm errors for 2nd level inside
-        // Split the stderr by \n character to get the npm ERR! plaintext lines, ignore additonal JSON blob (emitted by npm >=7)
+        // Split the stderr by \n character to get the npm ERR! plaintext lines, ignore additional JSON blob (emitted by npm >=7)
         // see https://github.com/serverless-heaven/serverless-webpack/pull/782 and https://github.com/floydspace/serverless-esbuild/issues/288
         const lines = split('\n', err.stderr);
         const npmErrors = takeWhile((line) => line !== '{', lines);
@@ -143,10 +160,7 @@ export class NPM implements Packager {
         const hasThrowableErrors = npmErrors.every(
           (error) =>
             !isEmpty(error) &&
-            !any(
-              (ignoredError) => startsWith(`npm ERR! ${ignoredError.npmError}`, error),
-              ignoredNpmErrors
-            )
+            !any((ignoredError) => startsWith(`npm ERR! ${ignoredError.npmError}`, error), ignoredNpmErrors)
         );
 
         if (!hasThrowableErrors && !isEmpty(err.stdout)) {
@@ -171,6 +185,7 @@ export class NPM implements Packager {
           // If this isn't the root of the tree
           if (rootDeps !== deps) {
             // Set it as resolved
+            // eslint-disable-next-line no-param-reassign
             deps[name] ??= {
               version: tree.version,
               isRootDep: true,
@@ -197,6 +212,7 @@ export class NPM implements Packager {
             // }
           } else {
             // This is a root node_modules dependency
+            // eslint-disable-next-line no-param-reassign
             rootDeps[name] ??= {
               version: tree.version,
               ...(tree.dependencies &&
@@ -205,10 +221,12 @@ export class NPM implements Packager {
                 }),
             };
           }
+
           return deps;
         }
 
         // Module is only installed within the node_modules of this dep. Iterate through it's dep tree
+        // eslint-disable-next-line no-param-reassign
         deps[name] ??= {
           version: tree.version,
           ...(tree.dependencies &&
@@ -216,22 +234,17 @@ export class NPM implements Packager {
               dependencies: convertTrees(tree.dependencies, rootDeps, {}),
             }),
         };
+
         return deps;
       }, currentDeps);
     };
 
     return {
-      dependencies: convertTrees(parsedDeps.dependencies, {}),
+      ...(parsedDeps.dependencies &&
+        !isEmpty(parsedDeps.dependencies) && {
+          dependencies: convertTrees(parsedDeps.dependencies, {}),
+        }),
     };
-  }
-
-  _rebaseFileReferences(pathToPackageRoot: string, moduleVersion: string) {
-    if (/^file:[^/]{2}/.test(moduleVersion)) {
-      const filePath = replace(/^file:/, '', moduleVersion);
-      return replace(/\\/g, '/', `file:${pathToPackageRoot}/${filePath}`);
-    }
-
-    return moduleVersion;
   }
 
   /**
@@ -243,6 +256,7 @@ export class NPM implements Packager {
    */
   rebaseLockfile(pathToPackageRoot: string, lockfile: JSONObject) {
     if (lockfile.version) {
+      // eslint-disable-next-line no-param-reassign
       lockfile.version = this._rebaseFileReferences(pathToPackageRoot, lockfile.version);
     }
 
@@ -257,19 +271,20 @@ export class NPM implements Packager {
 
   async install(cwd: string, extraArgs: Array<string>) {
     const command = /^win/.test(process.platform) ? 'npm.cmd' : 'npm';
+
     const args = ['install', ...extraArgs];
 
     await spawnProcess(command, args, { cwd });
   }
 
-  async prune(cwd) {
+  async prune(cwd: string) {
     const command = /^win/.test(process.platform) ? 'npm.cmd' : 'npm';
     const args = ['prune'];
 
     await spawnProcess(command, args, { cwd });
   }
 
-  async runScripts(cwd, scriptNames) {
+  async runScripts(cwd: string, scriptNames: string[]) {
     const command = /^win/.test(process.platform) ? 'npm.cmd' : 'npm';
 
     await Promise.all(
@@ -279,5 +294,15 @@ export class NPM implements Packager {
         return spawnProcess(command, args, { cwd });
       })
     );
+  }
+
+  private _rebaseFileReferences(pathToPackageRoot: string, moduleVersion: string) {
+    if (/^file:[^/]{2}/.test(moduleVersion)) {
+      const filePath = replace(/^file:/, '', moduleVersion);
+
+      return replace(/\\/g, '/', `file:${pathToPackageRoot}/${filePath}`);
+    }
+
+    return moduleVersion;
   }
 }

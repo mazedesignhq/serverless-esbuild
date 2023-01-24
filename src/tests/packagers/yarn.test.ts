@@ -1,14 +1,15 @@
-import { Yarn, YarnDeps } from '../../packagers/yarn';
-import { DependenciesResult } from '../../types';
+import { Yarn } from '../../packagers/yarn';
+import type { YarnDeps } from '../../packagers/yarn';
+import type { DependenciesResult } from '../../types';
 
 import * as utils from '../../utils';
 
 jest.mock('process');
 describe('Yarn Packager', () => {
-  const yarn = new Yarn();
+  const yarn = new Yarn({});
   const path = './';
 
-  let spawnSpy = jest.spyOn(utils, 'spawnProcess');
+  let spawnSpy: jest.SpyInstance;
 
   beforeEach(() => {
     spawnSpy = jest.spyOn(utils, 'spawnProcess');
@@ -229,5 +230,14 @@ describe('Yarn Packager', () => {
     const result = await yarn.getProdDependencies(path, 2);
 
     expect(result).toStrictEqual(expectedResult);
+  });
+
+  it('should skip install if the noInstall option is true', async () => {
+    const yarnWithoutInstall = new Yarn({
+      noInstall: true,
+    });
+
+    await expect(yarnWithoutInstall.install(path, [], false)).resolves.toBeUndefined();
+    expect(spawnSpy).toBeCalledTimes(0);
   });
 });

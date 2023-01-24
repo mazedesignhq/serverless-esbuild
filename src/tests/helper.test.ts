@@ -1,10 +1,10 @@
 import fs from 'fs-extra';
-import path from 'path';
 import os from 'os';
-import { mocked } from 'ts-jest/utils';
+import path from 'path';
 
-import { extractFileNames, flatDep, getDepsFromBundle } from '../helper';
-import { DependencyMap } from '../types';
+import { extractFunctionEntries, flatDep, getDepsFromBundle, isESM } from '../helper';
+
+import type { Configuration, DependencyMap } from '../types';
 
 jest.mock('fs-extra');
 
@@ -14,12 +14,12 @@ afterEach(() => {
   jest.resetAllMocks();
 });
 
-describe('extractFileNames', () => {
+describe('extractFunctionEntries', () => {
   const cwd = process.cwd();
 
   describe('aws', () => {
     it('should return entries for handlers which reference files in the working directory', () => {
-      mocked(fs.existsSync).mockReturnValue(true);
+      jest.mocked(fs.existsSync).mockReturnValue(true);
       const functionDefinitions = {
         function1: {
           events: [],
@@ -31,24 +31,56 @@ describe('extractFileNames', () => {
         },
       };
 
-      const fileNames = extractFileNames(cwd, 'aws', functionDefinitions);
+      const fileNames = extractFunctionEntries(cwd, 'aws', functionDefinitions);
 
       expect(fileNames).toStrictEqual([
         {
           entry: 'file1.ts',
-          func: functionDefinitions['function1'],
+          func: functionDefinitions.function1,
           functionAlias: 'function1',
         },
         {
           entry: 'file2.ts',
-          func: functionDefinitions['function2'],
+          func: functionDefinitions.function2,
+          functionAlias: 'function2',
+        },
+      ]);
+    });
+
+    it('should return entries for handlers which reference directories that contain index files', () => {
+      jest.mocked(fs.existsSync).mockImplementation((fPath) => {
+        return typeof fPath !== 'string' || fPath.endsWith('/index.ts');
+      });
+
+      const functionDefinitions = {
+        function1: {
+          events: [],
+          handler: 'dir1.handler',
+        },
+        function2: {
+          events: [],
+          handler: 'dir2.handler',
+        },
+      };
+
+      const fileNames = extractFunctionEntries(cwd, 'aws', functionDefinitions);
+
+      expect(fileNames).toStrictEqual([
+        {
+          entry: 'dir1/index.ts',
+          func: functionDefinitions.function1,
+          functionAlias: 'function1',
+        },
+        {
+          entry: 'dir2/index.ts',
+          func: functionDefinitions.function2,
           functionAlias: 'function2',
         },
       ]);
     });
 
     it('should return entries for handlers which reference files in folders in the working directory', () => {
-      mocked(fs.existsSync).mockReturnValue(true);
+      jest.mocked(fs.existsSync).mockReturnValue(true);
       const functionDefinitions = {
         function1: {
           events: [],
@@ -60,24 +92,24 @@ describe('extractFileNames', () => {
         },
       };
 
-      const fileNames = extractFileNames(cwd, 'aws', functionDefinitions);
+      const fileNames = extractFunctionEntries(cwd, 'aws', functionDefinitions);
 
       expect(fileNames).toStrictEqual([
         {
           entry: 'folder/file1.ts',
-          func: functionDefinitions['function1'],
+          func: functionDefinitions.function1,
           functionAlias: 'function1',
         },
         {
           entry: 'folder/file2.ts',
-          func: functionDefinitions['function2'],
+          func: functionDefinitions.function2,
           functionAlias: 'function2',
         },
       ]);
     });
 
     it('should return entries for handlers which reference files using a relative path in the working directory', () => {
-      mocked(fs.existsSync).mockReturnValue(true);
+      jest.mocked(fs.existsSync).mockReturnValue(true);
       const functionDefinitions = {
         function1: {
           events: [],
@@ -89,24 +121,24 @@ describe('extractFileNames', () => {
         },
       };
 
-      const fileNames = extractFileNames(cwd, 'aws', functionDefinitions);
+      const fileNames = extractFunctionEntries(cwd, 'aws', functionDefinitions);
 
       expect(fileNames).toStrictEqual([
         {
           entry: 'file1.ts',
-          func: functionDefinitions['function1'],
+          func: functionDefinitions.function1,
           functionAlias: 'function1',
         },
         {
           entry: 'file2.ts',
-          func: functionDefinitions['function2'],
+          func: functionDefinitions.function2,
           functionAlias: 'function2',
         },
       ]);
     });
 
     it('should return entries for handlers on a Windows platform', () => {
-      mocked(fs.existsSync).mockReturnValue(true);
+      jest.mocked(fs.existsSync).mockReturnValue(true);
       jest.spyOn(path, 'relative').mockReturnValueOnce('src\\file1.ts');
       jest.spyOn(os, 'platform').mockReturnValueOnce('win32');
       const functionDefinitions = {
@@ -116,19 +148,19 @@ describe('extractFileNames', () => {
         },
       };
 
-      const fileNames = extractFileNames(cwd, 'aws', functionDefinitions);
+      const fileNames = extractFunctionEntries(cwd, 'aws', functionDefinitions);
 
       expect(fileNames).toStrictEqual([
         {
           entry: 'src/file1.ts',
-          func: functionDefinitions['function1'],
+          func: functionDefinitions.function1,
           functionAlias: 'function1',
         },
       ]);
     });
 
     it('should throw an error if the handlers reference a file which does not exist', () => {
-      mocked(fs.existsSync).mockReturnValue(false);
+      jest.mocked(fs.existsSync).mockReturnValue(false);
       const functionDefinitions = {
         function1: {
           events: [],
@@ -140,26 +172,34 @@ describe('extractFileNames', () => {
         },
       };
 
-      expect(() => extractFileNames(cwd, 'aws', functionDefinitions)).toThrowError();
+      expect(() => extractFunctionEntries(cwd, 'aws', functionDefinitions)).toThrowError();
       expect(consoleSpy).toBeCalled();
     });
   });
 });
 
 describe('getDepsFromBundle', () => {
-  const path = './';
-  describe('node platform', () => {
-    const platform = 'node';
+  const inputPath = './';
+
+  describe('require statements', () => {
     it('should extract deps from a string', () => {
-      mocked(fs).readFileSync.mockReturnValue('require("@scope/package1");require("package2")');
-      expect(getDepsFromBundle(path, platform)).toStrictEqual(['@scope/package1', 'package2']);
+      jest.mocked(fs).readFileSync.mockReturnValue(`
+        require("@scope/package1");
+        require("package2");
+        function req3() {
+          return require('package3');
+        }
+      `);
+      expect(getDepsFromBundle(inputPath, false)).toStrictEqual(['@scope/package1', 'package2', 'package3']);
     });
 
     it('should extract the base dep from a string', () => {
-      mocked(fs).readFileSync.mockReturnValue(
-        'require("@scope/package1/subpath");require("package2/subpath");require("@scope/package3/subpath/subpath")require("package4/subpath/subpath")'
-      );
-      expect(getDepsFromBundle(path, platform)).toStrictEqual([
+      jest
+        .mocked(fs)
+        .readFileSync.mockReturnValue(
+          'require("@scope/package1/subpath");require("package2/subpath");require("@scope/package3/subpath/subpath");require("package4/subpath/subpath")'
+        );
+      expect(getDepsFromBundle(inputPath, false)).toStrictEqual([
         '@scope/package1',
         'package2',
         '@scope/package3',
@@ -168,32 +208,61 @@ describe('getDepsFromBundle', () => {
     });
 
     it('should remove duplicate package requires', () => {
-      mocked(fs).readFileSync.mockReturnValue(
-        'require("package1/subpath");require("package1");require("package1")'
-      );
-      expect(getDepsFromBundle(path, platform)).toStrictEqual(['package1']);
+      jest
+        .mocked(fs)
+        .readFileSync.mockReturnValue('require("package1/subpath");require("package1");require("package1")');
+      expect(getDepsFromBundle(inputPath, false)).toStrictEqual(['package1']);
     });
   });
 
-  describe('neutral platform', () => {
-    const platform = 'neutral';
-
+  describe('import statements', () => {
     it('should extract deps from a string', () => {
-      mocked(fs).readFileSync.mockReturnValue(
+      jest.mocked(fs).readFileSync.mockReturnValue(
         `
         import * as n from "package1";
         import "package2";
         import {hello as r} from "package3";
+
+        function dynamicImport() {
+          return import('package4');
+        }
         `
       );
-      expect(getDepsFromBundle(path, platform)).toStrictEqual(['package1', 'package2', 'package3']);
+      expect(getDepsFromBundle(inputPath, true)).toStrictEqual(['package1', 'package2', 'package3', 'package4']);
     });
+
     it('should extract deps from a minified string', () => {
-      mocked(fs).readFileSync.mockReturnValue(
-        'import*as n from"package1";import"package2";import{hello as r}from"package3";'
-      );
-      expect(getDepsFromBundle(path, platform)).toStrictEqual(['package1', 'package2', 'package3']);
+      jest
+        .mocked(fs)
+        .readFileSync.mockReturnValue('import*as n from"package1";import"package2";import{hello as r}from"package3";');
+      expect(getDepsFromBundle(inputPath, true)).toStrictEqual(['package1', 'package2', 'package3']);
     });
+  });
+});
+
+describe('isESM', () => {
+  it('should return true when format is set to esm', () => {
+    const config = {
+      format: 'esm',
+    } as Partial<Configuration> as Configuration;
+
+    expect(isESM(config)).toBe(true);
+  });
+
+  it('should return true when platform is set to neutral and format is not set', () => {
+    const config = {
+      platform: 'neutral',
+    } as Partial<Configuration> as Configuration;
+
+    expect(isESM(config)).toBe(true);
+  });
+
+  it('should return false when platform is set to node and format is not set', () => {
+    const config = {
+      platform: 'node',
+    } as Partial<Configuration> as Configuration;
+
+    expect(isESM(config)).toBe(false);
   });
 });
 

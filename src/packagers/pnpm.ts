@@ -1,8 +1,9 @@
-import { any, isEmpty, reduce, replace, split, startsWith } from 'ramda';
+import { isEmpty, reduce, replace, split, startsWith } from 'ramda';
+import { isString } from '../helper';
 
-import { JSONObject } from '../types';
+import type { JSONObject } from '../types';
 import { SpawnError, spawnProcess } from '../utils';
-import { Packager } from './packager';
+import type { Packager } from './packager';
 
 /**
  * pnpm packager.
@@ -28,31 +29,32 @@ export class Pnpm implements Packager {
       '--prod', // Only prod dependencies
       '--json',
       depth ? `--depth=${depth}` : null,
-    ].filter(Boolean);
+    ].filter(isString);
 
     // If we need to ignore some errors add them here
-    const ignoredPnpmErrors = [];
+    const ignoredPnpmErrors: Array<{
+      npmError: string;
+      log: boolean;
+    }> = [];
 
     try {
       const processOutput = await spawnProcess(command, args, { cwd });
       const depJson = processOutput.stdout;
 
-      return JSON.parse(depJson);
+      return JSON.parse(depJson)[0];
     } catch (err) {
       if (err instanceof SpawnError) {
         // Only exit with an error if we have critical npm errors for 2nd level inside
         const errors = split('\n', err.stderr);
         const failed = reduce(
-          (f, error) => {
-            if (f) {
+          (acc, error) => {
+            if (acc) {
               return true;
             }
+
             return (
               !isEmpty(error) &&
-              !any(
-                (ignoredError) => startsWith(`npm ERR! ${ignoredError.npmError}`, error),
-                ignoredPnpmErrors
-              )
+              !ignoredPnpmErrors.some((ignoredError) => startsWith(`npm ERR! ${ignoredError.npmError}`, error))
             );
           },
           false,
@@ -68,21 +70,13 @@ export class Pnpm implements Packager {
     }
   }
 
-  _rebaseFileReferences(pathToPackageRoot: string, moduleVersion: string) {
-    if (/^file:[^/]{2}/.test(moduleVersion)) {
-      const filePath = replace(/^file:/, '', moduleVersion);
-      return replace(/\\/g, '/', `file:${pathToPackageRoot}/${filePath}`);
-    }
-
-    return moduleVersion;
-  }
-
   /**
    * We should not be modifying 'pnpm-lock.yaml'
    * because this file should be treated as internal to pnpm.
    */
   rebaseLockfile(pathToPackageRoot: string, lockfile: JSONObject) {
     if (lockfile.version) {
+      // eslint-disable-next-line no-param-reassign
       lockfile.version = this._rebaseFileReferences(pathToPackageRoot, lockfile.version);
     }
 
@@ -95,24 +89,22 @@ export class Pnpm implements Packager {
     return lockfile;
   }
 
-  async install(cwd, extraArgs: Array<string>, useLockfile = true) {
+  async install(cwd: string, extraArgs: Array<string>) {
     const command = /^win/.test(process.platform) ? 'pnpm.cmd' : 'pnpm';
 
-    const args = useLockfile
-      ? ['install', '--frozen-lockfile', ...extraArgs]
-      : ['install', ...extraArgs];
+    const args = ['install', '--no-frozen-lockfile', ...extraArgs];
 
     await spawnProcess(command, args, { cwd });
   }
 
-  async prune(cwd) {
+  async prune(cwd: string) {
     const command = /^win/.test(process.platform) ? 'pnpm.cmd' : 'pnpm';
     const args = ['prune'];
 
     await spawnProcess(command, args, { cwd });
   }
 
-  async runScripts(cwd, scriptNames) {
+  async runScripts(cwd: string, scriptNames: string[]) {
     const command = /^win/.test(process.platform) ? 'pnpm.cmd' : 'pnpm';
 
     await Promise.all(
@@ -122,5 +114,15 @@ export class Pnpm implements Packager {
         return spawnProcess(command, args, { cwd });
       })
     );
+  }
+
+  private _rebaseFileReferences(pathToPackageRoot: string, moduleVersion: string) {
+    if (/^file:[^/]{2}/.test(moduleVersion)) {
+      const filePath = replace(/^file:/, '', moduleVersion);
+
+      return replace(/\\/g, '/', `file:${pathToPackageRoot}/${filePath}`);
+    }
+
+    return moduleVersion;
   }
 }

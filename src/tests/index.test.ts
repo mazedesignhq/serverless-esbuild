@@ -1,8 +1,8 @@
-import Serverless from 'serverless';
-import Service from 'serverless/classes/Service';
-import EsbuildServerlessPlugin from '../index';
-
 import fs from 'fs-extra';
+import type Serverless from 'serverless';
+import type Service from 'serverless/classes/Service';
+
+import EsbuildServerlessPlugin from '../index';
 
 jest.mock('fs-extra');
 
@@ -54,6 +54,14 @@ const mockServerlessConfig = (serviceOverride?: Partial<Service>): Serverless =>
     config: {
       servicePath: '/workDir',
     },
+    configSchemaHandler: {
+      defineCustomProperties: jest.fn(),
+      defineFunctionEvent: jest.fn(),
+      defineFunctionEventProperties: jest.fn(),
+      defineFunctionProperties: jest.fn(),
+      defineProvider: jest.fn(),
+      defineTopLevelProperty: jest.fn(),
+    },
     cli: mockCli,
   } as Partial<Serverless> as Serverless;
 };
@@ -71,6 +79,8 @@ describe('Move Artifacts', () => {
   it('should copy files from the esbuild folder to the serverless folder', async () => {
     const plugin = new EsbuildServerlessPlugin(mockServerlessConfig(), mockOptions);
 
+    plugin.hooks.initialize?.();
+
     await plugin.moveArtifacts();
 
     expect(fs.copy).toBeCalledWith('/workDir/.esbuild/.serverless', '/workDir/.serverless');
@@ -78,21 +88,23 @@ describe('Move Artifacts', () => {
 
   describe('function option', () => {
     it('should update the selected functions base path to the serverless folder', async () => {
-      mockGetFunction.mockReturnValue(packageIndividuallyService.functions.hello1);
+      mockGetFunction.mockReturnValue(packageIndividuallyService.functions?.hello1);
       const plugin = new EsbuildServerlessPlugin(mockServerlessConfig(), {
         ...mockOptions,
         function: 'hello1',
       });
 
+      plugin.hooks.initialize?.();
+
       await plugin.moveArtifacts();
 
       expect(plugin.functions).toMatchInlineSnapshot(`
-        Object {
-          "hello1": Object {
-            "events": Array [],
+        {
+          "hello1": {
+            "events": [],
             "handler": "hello1.handler",
-            "package": Object {
-              "artifact": "/workDir/.serverless/hello1",
+            "package": {
+              "artifact": ".serverless/hello1",
             },
           },
         }
@@ -104,22 +116,24 @@ describe('Move Artifacts', () => {
     it('should update function package artifacts base path to the serverless folder', async () => {
       const plugin = new EsbuildServerlessPlugin(mockServerlessConfig(), mockOptions);
 
+      plugin.hooks.initialize?.();
+
       await plugin.moveArtifacts();
 
       expect(plugin.functions).toMatchInlineSnapshot(`
-        Object {
-          "hello1": Object {
-            "events": Array [],
+        {
+          "hello1": {
+            "events": [],
             "handler": "hello1.handler",
-            "package": Object {
-              "artifact": "/workDir/.serverless/hello1",
+            "package": {
+              "artifact": ".serverless/hello1",
             },
           },
-          "hello2": Object {
-            "events": Array [],
+          "hello2": {
+            "events": [],
             "handler": "hello2.handler",
-            "package": Object {
-              "artifact": "/workDir/.serverless/hello2",
+            "package": {
+              "artifact": ".serverless/hello2",
             },
           },
         }
@@ -137,22 +151,59 @@ describe('Move Artifacts', () => {
         mockOptions
       );
 
+      plugin.hooks.initialize?.();
+
       await plugin.moveArtifacts();
 
       expect(plugin.functions).toMatchInlineSnapshot(`
-        Object {
-          "hello1": Object {
-            "events": Array [],
+        {
+          "hello1": {
+            "events": [],
             "handler": "hello1.handler",
-            "package": Object {
-              "artifact": "/workDir/.serverless/hello1",
+            "package": {
+              "artifact": ".serverless/hello1",
             },
           },
-          "hello2": Object {
-            "events": Array [],
+          "hello2": {
+            "events": [],
             "handler": "hello2.handler",
-            "package": Object {
-              "artifact": "/workDir/.serverless/hello2",
+            "package": {
+              "artifact": ".serverless/hello2",
+            },
+          },
+        }
+      `);
+    });
+
+    it('should skip function if skipEsbuild is set to true', async () => {
+      const hello3 = { handler: 'hello3.handler', events: [], skipEsbuild: true };
+      const plugin = new EsbuildServerlessPlugin(
+        mockServerlessConfig({
+          functions: {
+            ...packageIndividuallyService.functions,
+            hello3,
+          },
+        }),
+        mockOptions
+      );
+      plugin.hooks.initialize?.();
+
+      await plugin.moveArtifacts();
+
+      expect(plugin.functions).toMatchInlineSnapshot(`
+        {
+          "hello1": {
+            "events": [],
+            "handler": "hello1.handler",
+            "package": {
+              "artifact": ".serverless/hello1",
+            },
+          },
+          "hello2": {
+            "events": [],
+            "handler": "hello2.handler",
+            "package": {
+              "artifact": ".serverless/hello2",
             },
           },
         }
@@ -164,9 +215,11 @@ describe('Move Artifacts', () => {
     it('should update the service package artifact base path to the serverless folder', async () => {
       const plugin = new EsbuildServerlessPlugin(mockServerlessConfig(packageService), mockOptions);
 
+      plugin.hooks.initialize?.();
+
       await plugin.moveArtifacts();
 
-      expect(plugin.serverless.service.package.artifact).toBe('/workDir/.serverless/hello');
+      expect(plugin.serverless.service.package.artifact).toBe('.serverless/hello');
     });
   });
 });

@@ -1,80 +1,119 @@
-import { build, BuildResult, BuildOptions } from 'esbuild';
+import assert from 'assert';
+import path from 'path';
+
 import fs from 'fs-extra';
 import globby from 'globby';
-import path from 'path';
-import pMap from 'p-map';
-import { concat, always, memoizeWith, mergeRight } from 'ramda';
-import Serverless from 'serverless';
-import ServerlessPlugin from 'serverless/classes/Plugin';
+
+import { concat, mergeRight } from 'ramda';
+import type Serverless from 'serverless';
+import type ServerlessPlugin from 'serverless/classes/Plugin';
 import chokidar from 'chokidar';
+import anymatch from 'anymatch';
 
 import {
+  asArray,
+  assertIsString,
+  assertIsSupportedRuntime,
   buildServerlessV3LoggerFromLegacyLogger,
-  extractFileNames,
+  extractFunctionEntries,
+  isNodeMatcherKey,
+  isString,
   providerRuntimeMatcher,
 } from './helper';
 import { packExternalModules } from './pack-externals';
 import { pack } from './pack';
 import { preOffline } from './pre-offline';
 import { preLocal } from './pre-local';
-import { trimExtension } from './utils';
+import { bundle } from './bundle';
 import { BUILD_FOLDER, ONLY_PREFIX, SERVERLESS_FOLDER, WORK_FOLDER } from './constants';
-import { Configuration, FunctionBuildResult, Plugins, ReturnPluginsFn } from './types';
+import type {
+  ConfigFn,
+  Configuration,
+  EsbuildFunctionDefinitionHandler,
+  FileBuildResult,
+  FunctionBuildResult,
+  Plugins,
+  ReturnPluginsFn,
+} from './types';
 
-const DEFAULT_BUILD_OPTIONS: Partial<Configuration> = {
-  bundle: true,
-  target: 'node12',
-  external: [],
-  exclude: ['aws-sdk'],
-  nativeZip: false,
-  packager: 'npm',
-  installExtraArgs: [],
-  watch: {
-    pattern: './**/*.(js|ts)',
-    ignore: [WORK_FOLDER, 'dist', 'node_modules', SERVERLESS_FOLDER],
-  },
-  keepOutputDirectory: false,
-  packagerOptions: {},
-  platform: 'node',
-};
+function updateFile(op: string, src: string, dest: string) {
+  if (['add', 'change', 'addDir'].includes(op)) {
+    fs.copySync(src, dest, {
+      dereference: true,
+      errorOnExist: false,
+      preserveTimestamps: true,
+      recursive: true,
+    });
+
+    return;
+  }
+
+  if (['unlink', 'unlinkDir'].includes(op)) {
+    fs.removeSync(dest);
+  }
+}
 
 class EsbuildServerlessPlugin implements ServerlessPlugin {
   serviceDirPath: string;
-  workDirPath: string;
-  buildDirPath: string;
+
+  outputWorkFolder: string | undefined;
+
+  workDirPath: string | undefined;
+
+  outputBuildFolder: string | undefined;
+
+  buildDirPath: string | undefined;
+
   log: ServerlessPlugin.Logging['log'];
 
   serverless: Serverless;
-  options: Serverless.Options;
-  hooks: ServerlessPlugin.Hooks;
-  buildResults: FunctionBuildResult[];
-  packExternalModules: () => Promise<void>;
-  pack: () => Promise<void>;
-  preOffline: () => Promise<void>;
-  preLocal: () => void;
 
-  constructor(
-    serverless: Serverless,
-    options: Serverless.Options,
-    logging?: ServerlessPlugin.Logging
-  ) {
+  options: Serverless.Options;
+
+  hooks: ServerlessPlugin.Hooks;
+
+  buildOptions: Configuration | undefined;
+
+  buildResults: FunctionBuildResult[] | undefined;
+
+  /** Used for storing previous esbuild build results so we can rebuild more efficiently */
+  buildCache: Record<string, FileBuildResult> = {};
+
+  // These are bound to imported functions.
+  packExternalModules: typeof packExternalModules;
+
+  pack: typeof pack;
+
+  preOffline: typeof preOffline;
+
+  preLocal: typeof preLocal;
+
+  bundle: typeof bundle;
+
+  constructor(serverless: Serverless, options: Serverless.Options, logging?: ServerlessPlugin.Logging) {
     this.serverless = serverless;
     this.options = options;
-    this.log =
-      logging?.log ||
-      buildServerlessV3LoggerFromLegacyLogger(this.serverless.cli.log, this.options.verbose);
+    this.log = logging?.log || buildServerlessV3LoggerFromLegacyLogger(this.serverless.cli, this.options.verbose);
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore old versions use servicePath, new versions serviceDir. Types will use only one of them
+    this.serviceDirPath = this.serverless.config.serviceDir || this.serverless.config.servicePath;
+
     this.packExternalModules = packExternalModules.bind(this);
     this.pack = pack.bind(this);
     this.preOffline = preOffline.bind(this);
     this.preLocal = preLocal.bind(this);
+    this.bundle = bundle.bind(this);
 
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore old versions use servicePath, new versions serviceDir. Types will use only one of them
-    this.serviceDirPath = this.serverless.config.serviceDir || this.serverless.config.servicePath;
-    this.workDirPath = path.join(this.serviceDirPath, WORK_FOLDER);
-    this.buildDirPath = path.join(this.workDirPath, BUILD_FOLDER);
+    // This tells serverless that this skipEsbuild property can exist in a function definition, but isn't required.
+    // That way a user could skip a function if they have defined their own artifact, for example.
+    this.serverless.configSchemaHandler.defineFunctionProperties(this.serverless.service.provider.name, {
+      properties: {
+        skipEsbuild: { type: 'boolean' },
+      },
+    });
 
     this.hooks = {
+      initialize: () => this.init(),
       'before:run:run': async () => {
         await this.bundle();
         await this.packExternalModules();
@@ -121,6 +160,14 @@ class EsbuildServerlessPlugin implements ServerlessPlugin {
     };
   }
 
+  private init() {
+    this.buildOptions = this.getBuildOptions();
+    this.outputWorkFolder = this.buildOptions.outputWorkFolder || WORK_FOLDER;
+    this.outputBuildFolder = this.buildOptions.outputBuildFolder || BUILD_FOLDER;
+    this.workDirPath = path.join(this.serviceDirPath, this.outputWorkFolder);
+    this.buildDirPath = path.join(this.workDirPath, this.outputBuildFolder);
+  }
+
   /**
    * Checks if the runtime for the given function is nodejs.
    * If the runtime is not set , checks the global runtime.
@@ -130,7 +177,8 @@ class EsbuildServerlessPlugin implements ServerlessPlugin {
   private isNodeFunction(func: Serverless.FunctionDefinitionHandler): boolean {
     const runtime = func.runtime || this.serverless.service.provider.runtime;
     const runtimeMatcher = providerRuntimeMatcher[this.serverless.service.provider.name];
-    return Boolean(runtimeMatcher?.[runtime]);
+
+    return isNodeMatcherKey(runtime) && typeof runtimeMatcher?.[runtime] === 'string';
   }
 
   /**
@@ -153,21 +201,30 @@ class EsbuildServerlessPlugin implements ServerlessPlugin {
 
     // ignore all functions with a different runtime than nodejs:
     const nodeFunctions: Record<string, Serverless.FunctionDefinitionHandler> = {};
+
     for (const [functionAlias, fn] of Object.entries(functions)) {
-      if (this.isFunctionDefinitionHandler(fn) && this.isNodeFunction(fn)) {
+      if (
+        this.isFunctionDefinitionHandler(fn) &&
+        this.isNodeFunction(fn) &&
+        !(fn as EsbuildFunctionDefinitionHandler).skipEsbuild
+      ) {
         nodeFunctions[functionAlias] = fn;
       }
     }
+
     return nodeFunctions;
   }
 
   get plugins(): Plugins {
-    if (!this.buildOptions.plugins) return;
+    if (!this.buildOptions?.plugins) {
+      return [];
+    }
 
-    const plugins: Plugins | ReturnPluginsFn = require(path.join(
-      this.serviceDirPath,
-      this.buildOptions.plugins
-    ));
+    if (Array.isArray(this.buildOptions.plugins)) {
+      return this.buildOptions.plugins;
+    }
+
+    const plugins: Plugins | ReturnPluginsFn = require(path.join(this.serviceDirPath, this.buildOptions.plugins));
 
     if (typeof plugins === 'function') {
       return plugins(this.serverless);
@@ -176,44 +233,111 @@ class EsbuildServerlessPlugin implements ServerlessPlugin {
     return plugins;
   }
 
-  private getCachedOptions = memoizeWith(always('cache'), () => {
+  get packagePatterns() {
+    const { service } = this.serverless;
+    const patterns: string[] = [];
+    const ignored: string[] = [];
+
+    for (const pattern of service.package.patterns) {
+      if (pattern.startsWith('!')) {
+        ignored.push(pattern.slice(1));
+      } else {
+        patterns.push(pattern);
+      }
+    }
+
+    for (const fn of Object.values(this.functions)) {
+      const fnPatterns = asArray(fn.package?.patterns).filter(isString);
+
+      for (const pattern of fnPatterns) {
+        if (pattern.startsWith('!')) {
+          ignored.push(pattern.slice(1));
+        } else {
+          patterns.push(pattern);
+        }
+      }
+    }
+
+    return { patterns, ignored };
+  }
+
+  private getBuildOptions() {
+    const DEFAULT_BUILD_OPTIONS: Partial<Configuration> = {
+      concurrency: Infinity,
+      bundle: true,
+      target: 'node12',
+      external: [],
+      exclude: ['aws-sdk'],
+      nativeZip: false,
+      packager: 'npm',
+      packagerOptions: {
+        noInstall: false,
+      },
+      installExtraArgs: [],
+      watch: {
+        pattern: './**/*.(js|ts)',
+        ignore: [WORK_FOLDER, 'dist', 'node_modules', BUILD_FOLDER],
+      },
+      keepOutputDirectory: false,
+      platform: 'node',
+      outputFileExtension: '.js',
+    };
+
+    const providerRuntime = this.serverless.service.provider.runtime;
+
+    assertIsSupportedRuntime(providerRuntime);
+
     const runtimeMatcher = providerRuntimeMatcher[this.serverless.service.provider.name];
-    const target = runtimeMatcher?.[this.serverless.service.provider.runtime];
+    const target = isNodeMatcherKey(providerRuntime) ? runtimeMatcher?.[providerRuntime] : undefined;
+
     const resolvedOptions = {
       ...(target ? { target } : {}),
     };
     const withDefaultOptions = mergeRight(DEFAULT_BUILD_OPTIONS);
     const withResolvedOptions = mergeRight(withDefaultOptions(resolvedOptions));
-    return withResolvedOptions<Configuration>(this.serverless.service.custom?.esbuild ?? {});
-  });
 
-  get buildOptions() {
-    return this.getCachedOptions();
-  }
+    const configPath: string | undefined = this.serverless.service.custom?.esbuild?.config;
 
-  get rootFileNames() {
-    return extractFileNames(
-      this.serviceDirPath,
-      this.serverless.service.provider.name,
-      this.functions
+    const config: ConfigFn | undefined = configPath ? require(path.join(this.serviceDirPath, configPath)) : undefined;
+
+    return withResolvedOptions<Configuration>(
+      config ? config(this.serverless) : this.serverless.service.custom?.esbuild ?? {}
     );
   }
 
-  async watch(): Promise<void> {
+  get functionEntries() {
+    return extractFunctionEntries(this.serviceDirPath, this.serverless.service.provider.name, this.functions);
+  }
+
+  watch(): void {
+    assert(this.buildOptions, 'buildOptions is not defined');
+
+    const defaultPatterns = asArray(this.buildOptions.watch.pattern).filter(isString);
+
     const options = {
-      ignored: this.buildOptions.watch.ignore,
+      ignored: asArray(this.buildOptions.watch.ignore).filter(isString),
       awaitWriteFinish: true,
       ignoreInitial: true,
     };
 
-    chokidar.watch(this.buildOptions.watch.pattern, options).on('all', () =>
+    const { patterns, ignored } = this.packagePatterns;
+
+    const allPatterns: string[] = [...defaultPatterns, ...patterns];
+
+    options.ignored = [...options.ignored, ...ignored];
+
+    chokidar.watch(allPatterns, options).on('all', (eventName, srcPath) =>
       this.bundle(true)
+        .then(() => this.updateFile(eventName, srcPath))
         .then(() => this.log.verbose('Watching files for changes...'))
         .catch(() => this.log.error('Bundle error, waiting for a file change to reload...'))
     );
   }
 
   prepare() {
+    assertIsString(this.buildDirPath, 'buildDirPath is not a string');
+    assertIsString(this.workDirPath, 'workDirPath is not a string');
+
     fs.mkdirpSync(this.buildDirPath);
     fs.mkdirpSync(path.join(this.workDirPath, SERVERLESS_FOLDER));
     // exclude serverless-esbuild
@@ -243,111 +367,82 @@ class EsbuildServerlessPlugin implements ServerlessPlugin {
     }
   }
 
-  async bundle(incremental = false): Promise<BuildResult[]> {
-    this.prepare();
-    this.log.verbose(`Compiling to ${this.buildOptions.target} bundle with esbuild...`);
-    if (this.buildOptions.disableIncremental === true) {
-      incremental = false;
+  async updateFile(op: string, filename: string) {
+    assertIsString(this.buildDirPath, 'buildDirPath is not a string');
+
+    const { service } = this.serverless;
+
+    const patterns = asArray(service.package.patterns).filter(isString);
+
+    if (
+      patterns.length > 0 &&
+      anymatch(
+        patterns.filter((pattern) => !pattern.startsWith('!')),
+        filename
+      )
+    ) {
+      const destFileName = path.resolve(path.join(this.buildDirPath, filename));
+
+      updateFile(op, path.resolve(filename), destFileName);
+
+      return;
     }
 
-    const bundleMapper = async (bundleInfo) => {
-      const { entry, func, functionAlias } = bundleInfo;
-      const config: Omit<BuildOptions, 'watch'> = {
-        ...this.buildOptions,
-        external: [
-          ...this.buildOptions.external,
-          ...(this.buildOptions.exclude === '*' || this.buildOptions.exclude.includes('*')
-            ? []
-            : this.buildOptions.exclude),
-        ],
-        entryPoints: [entry],
-        outdir: path.join(this.buildDirPath, path.dirname(entry)),
-        incremental,
-        plugins: this.plugins,
-      };
-
-      // esbuild v0.7.0 introduced config options validation, so I have to delete plugin specific options from esbuild config.
-      delete config['concurrency'];
-      delete config['exclude'];
-      delete config['nativeZip'];
-      delete config['packager'];
-      delete config['packagePath'];
-      delete config['watch'];
-      delete config['keepOutputDirectory'];
-      delete config['packagerOptions'];
-      delete config['installExtraArgs'];
-      delete config['disableIncremental'];
-
-      const bundlePath = entry.substr(0, entry.lastIndexOf('.')) + '.js';
-
-      if (this.buildResults) {
-        const { result } = this.buildResults.find(({ func: fn }) => fn.name === func.name);
-        if (result.rebuild) {
-          await result.rebuild();
-          return { result, bundlePath, func, functionAlias };
-        }
+    for (const [functionAlias, fn] of Object.entries(this.functions)) {
+      if (fn.package?.patterns?.length === 0) {
+        continue;
       }
 
-      const result = await build(config);
+      if (
+        anymatch(
+          asArray(fn.package?.patterns)
+            .filter(isString)
+            .filter((pattern) => !pattern.startsWith('!')),
+          filename
+        )
+      ) {
+        const destFileName = path.resolve(path.join(this.buildDirPath, `${ONLY_PREFIX}${functionAlias}`, filename));
 
-      if (config.metafile) {
-        fs.writeFileSync(
-          path.join(this.buildDirPath, `${trimExtension(entry)}-meta.json`),
-          JSON.stringify(result.metafile, null, 2)
-        );
+        updateFile(op, path.resolve(filename), destFileName);
+
+        return;
       }
-
-      return { result, bundlePath, func, functionAlias };
-    };
-    this.log.verbose(`Compiling with concurrency: ${this.buildOptions.concurrency ?? 'Infinity'}`);
-    this.buildResults = await pMap(this.rootFileNames, bundleMapper, {
-      concurrency: this.buildOptions.concurrency,
-    });
-    this.log.verbose('Compiling completed.');
-    return this.buildResults.map((r) => r.result);
+    }
   }
 
   /** Link or copy extras such as node_modules or package.patterns definitions */
   async copyExtras() {
+    assertIsString(this.buildDirPath, 'buildDirPath is not a string');
+
     const { service } = this.serverless;
 
+    const packagePatterns = asArray(service.package.patterns).filter(isString);
+
     // include any "extras" from the "patterns" section
-    if (service.package.patterns.length > 0) {
-      const files = await globby(service.package.patterns);
+    if (packagePatterns.length) {
+      const files = await globby(packagePatterns);
 
       for (const filename of files) {
         const destFileName = path.resolve(path.join(this.buildDirPath, filename));
-        const dirname = path.dirname(destFileName);
 
-        if (!fs.existsSync(dirname)) {
-          fs.mkdirpSync(dirname);
-        }
-
-        if (!fs.existsSync(destFileName)) {
-          fs.copySync(path.resolve(filename), destFileName);
-        }
+        updateFile('add', path.resolve(filename), destFileName);
       }
     }
 
     // include any "extras" from the individual function "patterns" section
     for (const [functionAlias, fn] of Object.entries(this.functions)) {
-      if (fn.package.patterns.length === 0) {
+      const patterns = asArray(fn.package?.patterns).filter(isString);
+
+      if (!patterns.length) {
         continue;
       }
-      const files = await globby(fn.package.patterns);
+
+      const files = await globby(patterns);
+
       for (const filename of files) {
-        const destFileName = path.resolve(
-          path.join(this.buildDirPath, `${ONLY_PREFIX}${functionAlias}`, filename)
-        );
-        const dirname = path.dirname(destFileName);
+        const destFileName = path.resolve(path.join(this.buildDirPath, `${ONLY_PREFIX}${functionAlias}`, filename));
 
-        if (!fs.existsSync(dirname)) {
-          fs.mkdirpSync(dirname);
-        }
-
-        if (!fs.existsSync(destFileName)) {
-          fs.copySync(path.resolve(filename), destFileName);
-        }
+        updateFile('add', path.resolve(filename), destFileName);
       }
     }
   }
@@ -357,35 +452,33 @@ class EsbuildServerlessPlugin implements ServerlessPlugin {
    * packaging preferences.
    */
   async moveArtifacts(): Promise<void> {
+    assertIsString(this.workDirPath, 'workDirPath is not a string');
+
     const { service } = this.serverless;
 
-    await fs.copy(
-      path.join(this.workDirPath, SERVERLESS_FOLDER),
-      path.join(this.serviceDirPath, SERVERLESS_FOLDER)
-    );
+    await fs.copy(path.join(this.workDirPath, SERVERLESS_FOLDER), path.join(this.serviceDirPath, SERVERLESS_FOLDER));
 
-    if (service.package.individually || this.options.function) {
+    if (service.package.individually === true || this.options.function) {
       Object.values(this.functions).forEach((func) => {
-        func.package.artifact = path.join(
-          this.serviceDirPath,
-          SERVERLESS_FOLDER,
-          path.basename(func.package.artifact)
-        );
+        if (func.package?.artifact) {
+          // eslint-disable-next-line no-param-reassign
+          func.package.artifact = path.join(SERVERLESS_FOLDER, path.basename(func.package.artifact));
+        }
       });
+
       return;
     }
 
-    service.package.artifact = path.join(
-      this.serviceDirPath,
-      SERVERLESS_FOLDER,
-      path.basename(service.package.artifact)
-    );
+    service.package.artifact = path.join(SERVERLESS_FOLDER, path.basename(service.package.artifact));
   }
 
   async cleanup(): Promise<void> {
     await this.moveArtifacts();
+
     // Remove temp build folder
-    if (!this.buildOptions.keepOutputDirectory) {
+    if (!this.buildOptions?.keepOutputDirectory) {
+      assertIsString(this.workDirPath, 'workDirPath is not a string');
+
       fs.removeSync(path.join(this.workDirPath));
     }
   }

@@ -1,10 +1,10 @@
-import { filterFilesForZipPackage, pack } from '../pack';
-import * as utils from '../utils';
-
 import fs from 'fs-extra';
 import globby from 'globby';
-import { mocked } from 'ts-jest/utils';
-import { FunctionBuildResult } from '../types';
+
+import { filterFilesForZipPackage, pack } from '../pack';
+import * as utils from '../utils';
+import type { FunctionBuildResult } from '../types';
+import type EsbuildServerlessPlugin from '../index';
 
 jest.mock('globby');
 jest.mock('fs-extra');
@@ -19,18 +19,18 @@ describe('filterFilesForZipPackage', () => {
       filterFilesForZipPackage({
         files: [
           {
-            localPath:
-              '__only_service-otherFnName/bin/imagemagick/include/ImageMagick/magick/method-attribute.h',
+            localPath: '__only_service-otherFnName/bin/imagemagick/include/ImageMagick/magick/method-attribute.h',
             rootPath:
               '/home/capaj/repos/google/search/.esbuild/.build/__only_service-otherFnName/bin/imagemagick/include/ImageMagick/magick/method-attribute.h',
           },
+
           {
-            localPath:
-              '__only_fnAlias/bin/imagemagick/include/ImageMagick/magick/method-attribute.h',
+            localPath: '__only_fnAlias/bin/imagemagick/include/ImageMagick/magick/method-attribute.h',
             rootPath:
               '/home/capaj/repos/google/search/.esbuild/.build/__only_fnAlias/bin/imagemagick/include/ImageMagick/magick/method-attribute.h',
           },
         ],
+
         depWhiteList: [],
         functionAlias: 'fnAlias',
         isGoogleProvider: false,
@@ -39,8 +39,8 @@ describe('filterFilesForZipPackage', () => {
         excludedFiles: [],
       })
     ).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "localPath": "__only_fnAlias/bin/imagemagick/include/ImageMagick/magick/method-attribute.h",
           "rootPath": "/home/capaj/repos/google/search/.esbuild/.build/__only_fnAlias/bin/imagemagick/include/ImageMagick/magick/method-attribute.h",
         },
@@ -57,13 +57,13 @@ describe('pack', () => {
   describe('individually', () => {
     it('should create zips with the functionAlias as the name', async () => {
       const zipSpy = jest.spyOn(utils, 'zip').mockResolvedValue();
-      mocked(globby, true).sync.mockReturnValue(['hello1.js', 'hello2.js']);
-      mocked(globby).mockResolvedValue([]);
-      mocked(fs).statSync.mockReturnValue({ size: 123 } as fs.Stats);
+
+      jest.mocked(globby).sync.mockReturnValue(['hello1.js', 'hello2.js']);
+      jest.mocked(globby).mockResolvedValue([]);
+      jest.mocked(fs).statSync.mockReturnValue({ size: 123 } as fs.Stats);
 
       const buildResults: FunctionBuildResult[] = [
         {
-          result: { errors: [], warnings: [] },
           bundlePath: 'hello1.js',
           func: {
             handler: 'hello1.handler',
@@ -74,7 +74,6 @@ describe('pack', () => {
           functionAlias: 'hello1',
         },
         {
-          result: { errors: [], warnings: [] },
           bundlePath: 'hello2.js',
           func: {
             handler: 'hello2.handler',
@@ -87,6 +86,7 @@ describe('pack', () => {
       ];
 
       const esbuildPlugin = {
+        buildResults,
         serverless: {
           service: {
             package: {
@@ -105,7 +105,6 @@ describe('pack', () => {
         buildDirPath: '/workdir/serverless-esbuild/examples/individually/.esbuild/.build',
         workDirPath: '/workdir/serverless-esbuild/examples/individually/.esbuild/',
         serviceDirPath: '/workdir/serverless-esbuild/examples/individually',
-        buildResults,
         log: {
           error: jest.fn(),
           warning: jest.fn(),
@@ -117,7 +116,7 @@ describe('pack', () => {
         },
       };
 
-      await pack.call(esbuildPlugin);
+      await pack.call(esbuildPlugin as unknown as EsbuildServerlessPlugin);
 
       expect(zipSpy).toBeCalledWith(
         '/workdir/serverless-esbuild/examples/individually/.esbuild/.serverless/hello1.zip',

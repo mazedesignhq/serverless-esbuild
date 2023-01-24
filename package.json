@@ -1,7 +1,7 @@
 {
   "name": "@mazeapp/serverless-esbuild",
   "description": "Serverless plugin for zero-config JavaScript and TypeScript code bundling using extremely fast esbuild",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "files": [
     "dist",
     "package.json",

@@ -47,9 +47,7 @@ export function extractFunctionEntries(
 
       // Check that the file indeed exists.
       if (!fs.existsSync(path.join(cwd, entry))) {
-        console.log(`Cannot locate entrypoint, ${entry} not found`);
-
-        throw new Error('Compilation failed');
+        throw new Error(`Compilation failed. Cannot locate entrypoint, ${entry} not found`);
       }
 
       return [{ entry, func: null }];
@@ -92,8 +90,6 @@ export function extractFunctionEntries(
     }
 
     // Can't find the files. Watch will have an exception anyway. So throw one with error.
-    console.log(`Cannot locate handler - ${fileName} not found`);
-
     throw new Error(
       'Compilation failed. Please ensure you have an index file with ext .ts or .js, or have a path listed as main key in package.json'
     );
@@ -217,27 +213,50 @@ export type AwsNodeProviderRuntimeMatcher<Versions extends number> = {
   [Version in Versions as `nodejs${Version}.x`]: `node${Version}`;
 };
 
+export type AzureNodeProviderRuntimeMatcher<Versions extends number> = {
+  [Version in Versions as `nodejs${Version}`]: `node${Version}`;
+};
+
 export type GoogleNodeProviderRuntimeMatcher<Versions extends number> = {
   [Version in Versions as `nodejs${Version}`]: `node${Version}`;
 };
 
+export type ScalewayNodeProviderRuntimeMatcher<Versions extends number> = {
+  [Version in Versions as `node${Version}`]: `node${Version}`;
+};
+
 export type AwsNodeMatcher = AwsNodeProviderRuntimeMatcher<12 | 14 | 16 | 18>;
+
+export type AzureNodeMatcher = AzureNodeProviderRuntimeMatcher<12 | 14 | 16 | 18>;
 
 export type GoogleNodeMatcher = GoogleNodeProviderRuntimeMatcher<12 | 14 | 16 | 18>;
 
-export type NodeMatcher = AwsNodeMatcher & GoogleNodeMatcher;
+export type ScalewayNodeMatcher = ScalewayNodeProviderRuntimeMatcher<12 | 14 | 16 | 18 | 20>;
+
+export type NodeMatcher = AwsNodeMatcher & AzureNodeMatcher & GoogleNodeMatcher & ScalewayNodeMatcher;
 
 export type AwsNodeMatcherKey = keyof AwsNodeMatcher;
 
+export type AzureNodeMatcherKey = keyof AzureNodeMatcher;
+
 export type GoogleNodeMatcherKey = keyof GoogleNodeMatcher;
 
-export type NodeMatcherKey = AwsNodeMatcherKey | GoogleNodeMatcherKey;
+export type ScalewayNodeMatcherKey = keyof ScalewayNodeMatcher;
+
+export type NodeMatcherKey = AwsNodeMatcherKey | AzureNodeMatcherKey | GoogleNodeMatcherKey | ScalewayNodeMatcherKey;
 
 const awsNodeMatcher: AwsNodeMatcher = {
   'nodejs18.x': 'node18',
   'nodejs16.x': 'node16',
   'nodejs14.x': 'node14',
   'nodejs12.x': 'node12',
+};
+
+const azureNodeMatcher: AzureNodeMatcher = {
+  nodejs18: 'node18',
+  nodejs16: 'node16',
+  nodejs14: 'node14',
+  nodejs12: 'node12',
 };
 
 const googleNodeMatcher: GoogleNodeMatcher = {
@@ -247,11 +266,26 @@ const googleNodeMatcher: GoogleNodeMatcher = {
   nodejs12: 'node12',
 };
 
-const nodeMatcher: NodeMatcher = { ...googleNodeMatcher, ...awsNodeMatcher };
+const scalewayNodeMatcher: ScalewayNodeMatcher = {
+  node20: 'node20',
+  node18: 'node18',
+  node16: 'node16',
+  node14: 'node14',
+  node12: 'node12',
+};
+
+const nodeMatcher: NodeMatcher = {
+  ...googleNodeMatcher,
+  ...awsNodeMatcher,
+  ...azureNodeMatcher,
+  ...scalewayNodeMatcher,
+};
 
 export const providerRuntimeMatcher = Object.freeze<Record<string, NodeMatcher>>({
   aws: awsNodeMatcher as NodeMatcher,
+  azure: azureNodeMatcher as NodeMatcher,
   google: googleNodeMatcher as NodeMatcher,
+  scaleway: scalewayNodeMatcher as NodeMatcher,
 });
 
 export const isNodeMatcherKey = (input: unknown): input is NodeMatcherKey =>

@@ -1,6 +1,5 @@
 import assert from 'assert';
-import { build } from 'esbuild';
-import type { BuildOptions, BuildResult } from 'esbuild';
+import type { BuildOptions } from 'esbuild';
 import fs from 'fs-extra';
 import pMap from 'p-map';
 import path from 'path';
@@ -13,17 +12,12 @@ import { trimExtension } from './utils';
 
 const getStringArray = (input: unknown): string[] => asArray(input).filter(isString);
 
-export async function bundle(this: EsbuildServerlessPlugin, incremental = false): Promise<void> {
+export async function bundle(this: EsbuildServerlessPlugin): Promise<void> {
   assert(this.buildOptions, 'buildOptions is not defined');
 
   this.prepare();
 
   this.log.verbose(`Compiling to ${this.buildOptions?.target} bundle with esbuild...`);
-
-  if (this.buildOptions?.disableIncremental === true) {
-    // eslint-disable-next-line no-param-reassign
-    incremental = false;
-  }
 
   const exclude = getStringArray(this.buildOptions?.exclude);
 
@@ -39,20 +33,20 @@ export async function bundle(this: EsbuildServerlessPlugin, incremental = false)
     'keepOutputDirectory',
     'packagerOptions',
     'installExtraArgs',
-    'disableIncremental',
     'outputFileExtension',
     'outputBuildFolder',
     'outputWorkFolder',
     'nodeExternals',
+    'skipBuild',
+    'skipBuildExcludeFns',
   ].reduce<Record<string, any>>((options, optionName) => {
     const { [optionName]: _, ...rest } = options;
 
     return rest;
   }, this.buildOptions);
 
-  const config: Omit<BuildOptions, 'watch'> & { incremental?: boolean } = {
+  const config: Omit<BuildOptions, 'watch'> = {
     ...esbuildOptions,
-    incremental,
     external: [...getStringArray(this.buildOptions?.external), ...(exclude.includes('*') ? [] : exclude)],
     plugins: this.plugins,
   };
@@ -106,21 +100,16 @@ export async function bundle(this: EsbuildServerlessPlugin, incremental = false)
       outdir: path.join(buildDirPath, path.dirname(entry)),
     };
 
-    let context!: BuildContext;
-    let result!: BuildResult;
+    const pkg = await import('esbuild');
 
-    const pkg: any = await import('esbuild');
-    if (pkg.context) {
-      if (!!options.incremental || this.buildOptions?.disableIncremental === false) {
-        delete options.incremental;
-        context = await pkg.context(options);
-        result = await context?.rebuild();
-      } else {
-        delete options.incremental;
-        result = await build(options);
-      }
-    } else {
-      result = await build(options);
+    type ContextFn = (opts: typeof options) => Promise<BuildContext>;
+    type WithContext = typeof pkg & { context?: ContextFn };
+    const context = await (pkg as WithContext).context?.(options);
+
+    let result = await context?.rebuild();
+
+    if (!result) {
+      result = await pkg.build(options);
     }
 
     if (config.metafile) {

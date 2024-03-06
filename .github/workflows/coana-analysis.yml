@@ -26,7 +26,7 @@ jobs:
           node-version-file: package.json
           cache: 'npm'
 
-      - run: pnpm install
+      - run: npm ci
 
       - name: Run Coana CLI
         id: coana-cli

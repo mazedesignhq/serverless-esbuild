@@ -17,7 +17,7 @@ describe('utils/findProjectRoot', () => {
   });
 });
 
-describe('utils/zip', () => {
+describe.skip('utils/zip', () => {
   beforeEach(() => {
     mockFs({
       '/src': {

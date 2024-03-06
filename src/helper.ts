@@ -9,8 +9,9 @@ import { uniq } from 'ramda';
 
 import type Serverless from 'serverless';
 import type ServerlessPlugin from 'serverless/classes/Plugin';
-import type { Configuration, DependencyMap, FunctionEntry } from './types';
+import type { Configuration, DependencyMap, FunctionEntry, IFile } from './types';
 import type { EsbuildFunctionDefinitionHandler } from './types';
+import { DEFAULT_EXTENSIONS } from './constants';
 
 export function asArray<T>(data: T | T[]): T[] {
   return Array.isArray(data) ? data : [data];
@@ -27,7 +28,8 @@ export function assertIsString(input: unknown, message = 'input is not a string'
 export function extractFunctionEntries(
   cwd: string,
   provider: string,
-  functions: Record<string, Serverless.FunctionDefinitionHandler>
+  functions: Record<string, Serverless.FunctionDefinitionHandler>,
+  resolveExtensions?: string[]
 ): FunctionEntry[] {
   // The Google provider will use the entrypoint not from the definition of the
   // handler function, but instead from the package.json:main field, or via a
@@ -69,7 +71,7 @@ export function extractFunctionEntries(
       // replace only last instance to allow the same name for file and handler
       const fileName = handler.substring(0, fnNameLastAppearanceIndex);
 
-      const extensions = ['.ts', '.js', '.jsx', '.tsx'];
+      const extensions = resolveExtensions ?? DEFAULT_EXTENSIONS;
 
       for (const extension of extensions) {
         // Check if the .{extension} files exists. If so return that to watch
@@ -232,7 +234,7 @@ export type AwsNodeMatcher = AwsNodeProviderRuntimeMatcher<12 | 14 | 16 | 18 | 2
 
 export type AzureNodeMatcher = AzureNodeProviderRuntimeMatcher<12 | 14 | 16 | 18>;
 
-export type GoogleNodeMatcher = GoogleNodeProviderRuntimeMatcher<12 | 14 | 16 | 18>;
+export type GoogleNodeMatcher = GoogleNodeProviderRuntimeMatcher<12 | 14 | 16 | 18 | 20>;
 
 export type ScalewayNodeMatcher = ScalewayNodeProviderRuntimeMatcher<12 | 14 | 16 | 18 | 20>;
 
@@ -264,6 +266,7 @@ const azureNodeMatcher: AzureNodeMatcher = {
 };
 
 const googleNodeMatcher: GoogleNodeMatcher = {
+  nodejs20: 'node20',
   nodejs18: 'node18',
   nodejs16: 'node16',
   nodejs14: 'node14',
@@ -313,3 +316,18 @@ export const buildServerlessV3LoggerFromLegacyLogger = (
   verbose: legacyLogger.log.bind(legacyLogger),
   success: legacyLogger.log.bind(legacyLogger),
 });
+
+export const stripEntryResolveExtensions = (file: IFile, extensions: string[]): IFile => {
+  const resolveExtensionMatch = file.localPath.match(extensions.map((ext) => ext).join('|'));
+
+  if (resolveExtensionMatch?.length && !DEFAULT_EXTENSIONS.includes(resolveExtensionMatch[0])) {
+    const extensionParts = resolveExtensionMatch[0].split('.');
+
+    return {
+      ...file,
+      localPath: file.localPath.replace(resolveExtensionMatch[0], `.${extensionParts[extensionParts.length - 1]}`),
+    };
+  }
+
+  return file;
+};

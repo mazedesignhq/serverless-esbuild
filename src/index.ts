@@ -234,6 +234,7 @@ class EsbuildServerlessPlugin implements ServerlessPlugin {
     for (const [functionAlias, fn] of Object.entries(functions)) {
       const currFn = fn as EsbuildFunctionDefinitionHandler;
       if (this.isFunctionDefinitionHandler(currFn) && this.isNodeFunction(currFn)) {
+        buildOptions.disposeContext = currFn.disposeContext ? currFn.disposeContext : buildOptions.disposeContext; // disposeContext configuration can be overridden per function
         if (buildOptions.skipBuild && !buildOptions.skipBuildExcludeFns?.includes(functionAlias)) {
           currFn.skipEsbuild = true;
         }
@@ -320,6 +321,8 @@ class EsbuildServerlessPlugin implements ServerlessPlugin {
       outputFileExtension: '.js',
       skipBuild: false,
       skipBuildExcludeFns: [],
+      stripEntryResolveExtensions: false,
+      disposeContext: true, // default true
     };
 
     const providerRuntime = this.serverless.service.provider.runtime;
@@ -345,7 +348,12 @@ class EsbuildServerlessPlugin implements ServerlessPlugin {
   }
 
   get functionEntries() {
-    return extractFunctionEntries(this.serviceDirPath, this.serverless.service.provider.name, this.functions);
+    return extractFunctionEntries(
+      this.serviceDirPath,
+      this.serverless.service.provider.name,
+      this.functions,
+      this.buildOptions?.resolveExtensions
+    );
   }
 
   watch(): void {
@@ -520,7 +528,7 @@ class EsbuildServerlessPlugin implements ServerlessPlugin {
   async disposeContexts(): Promise<void> {
     for (const { context } of Object.values(this.buildCache)) {
       if (context) {
-        await context.dispose();
+        this.buildOptions?.disposeContext && (await context.dispose());
       }
     }
   }

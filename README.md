@@ -90,7 +90,8 @@ See [example folder](examples) for some example configurations.
 | `watch`                | Watch options for `serverless-offline`.                                                                                                                                                            | [Watch Options](#watch-options)                     |
 | `skipBuild`            | Avoid rebuilding lambda artifacts in favor of reusing previous build artifacts.                                                                                                                    | `false`                                             |
 | `skipBuildExcludeFns` | An array of lambda names that will always be rebuilt if `skipBuild` is set to `true` and bundling individually. This is helpful for dynamically generated functions like serverless-plugin-warmup. | `[]`                                                 |
-
+| `stripEntryResolveExtensions` | A boolean that determines if entrypoints using custom file extensions provided in the `resolveExtensions` ESbuild setting should be stripped of their custom extension upon packing the final bundle for that file. Example: `myLambda.custom.ts` would result in `myLambda.js` instead of `myLambda.custom.js`.
+| `disposeContext` | An option to disable the disposal of the context.(Functions can override the global `disposeContext` configuration by specifying their own `disposeContext` option in their individual configurations.) | `true`
 #### Default Esbuild Options
 
 The following `esbuild` options are automatically set.
@@ -130,14 +131,27 @@ The following `esbuild` options are automatically set.
 
 This plugin will automatically set the esbuild `target` for the following supported Serverless runtimes:
 
-###AWS 
+### AWS 
 
 | Runtime      | Target   |
 | ------------ | -------- |
+| `nodejs20.x` | `node20` |
 | `nodejs18.x` | `node18` |
 | `nodejs16.x` | `node16` |
 | `nodejs14.x` | `node14` |
 | `nodejs12.x` | `node12` |
+
+### Google
+
+This plugin is compatible with the [serverless-google-cloudfunctions](https://github.com/serverless/serverless-google-cloudfunctions) plugin, and will set the runtimes accordingly.
+
+| Runtime      | Target   |
+| ------------ | -------- |
+| `nodejs20`   | `node20` |
+| `nodejs18`   | `node18` |
+| `nodejs16`   | `node16` |
+| `nodejs14`   | `node14` |
+| `nodejs12`   | `node12` |
 
 ### Azure
 

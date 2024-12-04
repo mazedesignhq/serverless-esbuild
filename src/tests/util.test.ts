@@ -45,9 +45,7 @@ describe.skip('utils/zip', () => {
       },
     ];
 
-    await expect(zip(zipPath, filesPathList)).rejects.toThrowError(
-      "ENOENT, no such file or directory '/src/incorrect.txt'"
-    );
+    await expect(zip(zipPath, filesPathList)).rejects.toThrow("ENOENT, no such file or directory '/src/incorrect.txt'");
   });
 
   it.each([{ useNativeZip: true }, { useNativeZip: false }])(

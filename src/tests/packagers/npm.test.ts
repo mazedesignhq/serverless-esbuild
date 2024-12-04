@@ -26,8 +26,8 @@ describe('NPM Packager', () => {
 
     await npm.getProdDependencies(path);
 
-    expect(spawnSpy).toBeCalledTimes(2);
-    expect(spawnSpy).toBeCalledWith('npm', ['--version'], { cwd: './' });
+    expect(spawnSpy).toHaveBeenCalledTimes(2);
+    expect(spawnSpy).toHaveBeenCalledWith('npm', ['--version'], { cwd: './' });
   });
 
   it('should call spawnProcess with the correct arguments for listing dependencies on npm', async () => {
@@ -37,8 +37,8 @@ describe('NPM Packager', () => {
 
     await npm.getProdDependencies(path);
 
-    expect(spawnSpy).toBeCalledTimes(2);
-    expect(spawnSpy).toBeCalledWith('npm', ['ls', '-json', '-prod', '-long'], { cwd: './' });
+    expect(spawnSpy).toHaveBeenCalledTimes(2);
+    expect(spawnSpy).toHaveBeenCalledWith('npm', ['ls', '-json', '-prod', '-long'], { cwd: './' });
   });
 
   it('should call spawnProcess with the correct arguments for listing dependencies on npm v7', async () => {
@@ -48,8 +48,8 @@ describe('NPM Packager', () => {
 
     await npm.getProdDependencies(path);
 
-    expect(spawnSpy).toBeCalledTimes(2);
-    expect(spawnSpy).toBeCalledWith('npm', ['ls', '-json', '--omit=dev', '-long', '-all'], {
+    expect(spawnSpy).toHaveBeenCalledTimes(2);
+    expect(spawnSpy).toHaveBeenCalledWith('npm', ['ls', '-json', '--omit=dev', '-long', '-all'], {
       cwd: './',
     });
   });
@@ -59,8 +59,8 @@ describe('NPM Packager', () => {
 
     await npm.getProdDependencies(path, 2);
 
-    expect(spawnSpy).toBeCalledTimes(2);
-    expect(spawnSpy).toBeCalledWith('npm', ['ls', '-json', '-prod', '-long', '-depth=2'], {
+    expect(spawnSpy).toHaveBeenCalledTimes(2);
+    expect(spawnSpy).toHaveBeenCalledWith('npm', ['ls', '-json', '-prod', '-long', '-depth=2'], {
       cwd: './',
     });
   });
@@ -416,7 +416,7 @@ describe('NPM Packager', () => {
     expect(v7dependencies).toStrictEqual(expectedResult);
   });
 
-  it('should create the same dependency tree which handles deduping for both npmv6 and npmv7', async () => {
+  it('should create the same dependency tree which handles deduping for both npm v6 and v7', async () => {
     const v6depsList: NpmV6Deps = {
       name: 'serverless-example',
       version: '1.0.0',

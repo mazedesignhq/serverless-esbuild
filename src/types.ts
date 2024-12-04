@@ -46,6 +46,7 @@ export interface Configuration extends EsbuildOptions {
   outputFileExtension: '.js' | '.cjs' | '.mjs';
   nodeExternals?: NodeExternalsOptions;
   skipBuild?: boolean;
+  skipRebuild?: boolean;
   skipBuildExcludeFns: string[];
   stripEntryResolveExtensions?: boolean;
   disposeContext?: boolean;
@@ -54,6 +55,7 @@ export interface Configuration extends EsbuildOptions {
 export interface EsbuildFunctionDefinitionHandler extends Serverless.FunctionDefinitionHandler {
   disposeContext?: boolean;
   skipEsbuild: boolean;
+  esbuildEntrypoint?: string;
 }
 
 export interface FunctionEntry {

@@ -1,4 +1,5 @@
 import assert, { AssertionError } from 'assert';
+import { Predicate } from 'effect';
 import os from 'os';
 import path from 'path';
 
@@ -17,10 +18,8 @@ export function asArray<T>(data: T | T[]): T[] {
   return Array.isArray(data) ? data : [data];
 }
 
-export const isString = (input: unknown): input is string => typeof input === 'string';
-
 export function assertIsString(input: unknown, message = 'input is not a string'): asserts input is string {
-  if (!isString(input)) {
+  if (!Predicate.isString(input)) {
     throw new AssertionError({ message, actual: input });
   }
 }
@@ -62,14 +61,16 @@ export function extractFunctionEntries(
       return !(functions[functionAlias] as EsbuildFunctionDefinitionHandler).skipEsbuild;
     })
     .map((functionAlias) => {
-      const func = functions[functionAlias];
+      const func = functions[functionAlias] as EsbuildFunctionDefinitionHandler;
       assert(func, `${functionAlias} not found in functions`);
 
-      const { handler } = func;
-      const fnName = path.extname(handler);
-      const fnNameLastAppearanceIndex = handler.lastIndexOf(fnName);
+      const { handler, esbuildEntrypoint } = func;
+      const entrypoint = esbuildEntrypoint || handler;
+
+      const fnName = path.extname(entrypoint);
+      const fnNameLastAppearanceIndex = entrypoint.lastIndexOf(fnName);
       // replace only last instance to allow the same name for file and handler
-      const fileName = handler.substring(0, fnNameLastAppearanceIndex);
+      const fileName = entrypoint.substring(0, fnNameLastAppearanceIndex);
 
       const extensions = resolveExtensions ?? DEFAULT_EXTENSIONS;
 
@@ -198,7 +199,7 @@ export const getDepsFromBundle = (bundlePath: string, useESM: boolean): string[]
     },
   });
 
-  const baseDeps = deps.map(getBaseDep).filter(isString);
+  const baseDeps = deps.map(getBaseDep).filter(Predicate.isString);
 
   return uniq(baseDeps);
 };
@@ -230,7 +231,7 @@ export type ScalewayNodeProviderRuntimeMatcher<Versions extends number> = {
   [Version in Versions as `node${Version}`]: `node${Version}`;
 };
 
-export type AwsNodeMatcher = AwsNodeProviderRuntimeMatcher<12 | 14 | 16 | 18 | 20>;
+export type AwsNodeMatcher = AwsNodeProviderRuntimeMatcher<12 | 14 | 16 | 18 | 20 | 22>;
 
 export type AzureNodeMatcher = AzureNodeProviderRuntimeMatcher<12 | 14 | 16 | 18>;
 
@@ -251,6 +252,7 @@ export type ScalewayNodeMatcherKey = keyof ScalewayNodeMatcher;
 export type NodeMatcherKey = AwsNodeMatcherKey | AzureNodeMatcherKey | GoogleNodeMatcherKey | ScalewayNodeMatcherKey;
 
 const awsNodeMatcher: AwsNodeMatcher = {
+  'nodejs22.x': 'node22',
   'nodejs20.x': 'node20',
   'nodejs18.x': 'node18',
   'nodejs16.x': 'node16',

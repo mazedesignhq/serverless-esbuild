@@ -12,6 +12,7 @@
 
 - Zero-config: Works out of the box without the need to install any additional plugins
 - Works with Typescript and Javascript projects
+- Guaranteed to work in Node.js v18 and higher environments
 - Supports `sls package`, `sls deploy`, `sls deploy function`
 - Integrates with [`Serverless Invoke Local`](https://www.serverless.com/framework/docs/providers/aws/cli-reference/invoke-local) & [`serverless-offline`](https://github.com/dherault/serverless-offline)
 
@@ -89,6 +90,7 @@ See [example folder](examples) for some example configurations.
 | `packagerOptions`      | Extra options for packagers for `external` dependency resolution.                                                                                                                                  | [Packager Options](#packager-options)               |
 | `watch`                | Watch options for `serverless-offline`.                                                                                                                                                            | [Watch Options](#watch-options)                     |
 | `skipBuild`            | Avoid rebuilding lambda artifacts in favor of reusing previous build artifacts.                                                                                                                    | `false`                                             |
+| `skipRebuild`          | A boolean defining whether rebuild is avoided. Generally rebuild produces faster builds but in some context scenarios with many lambdas or low memory computer (like Github Actions) it can cause memory leaks.                                    | `false`                                             |
 | `skipBuildExcludeFns` | An array of lambda names that will always be rebuilt if `skipBuild` is set to `true` and bundling individually. This is helpful for dynamically generated functions like serverless-plugin-warmup. | `[]`                                                 |
 | `stripEntryResolveExtensions` | A boolean that determines if entrypoints using custom file extensions provided in the `resolveExtensions` ESbuild setting should be stripped of their custom extension upon packing the final bundle for that file. Example: `myLambda.custom.ts` would result in `myLambda.js` instead of `myLambda.custom.js`.
 | `disposeContext` | An option to disable the disposal of the context.(Functions can override the global `disposeContext` configuration by specifying their own `disposeContext` option in their individual configurations.) | `true`
@@ -102,7 +104,7 @@ The following `esbuild` options are automatically set.
 | `entryPoints` | N/A        | Cannot be overridden                                                   |
 | `outDir`      | N/A        | Cannot be overridden                                                   |
 | `platform`    | `'node'`   | Set `format` to `esm` to enable ESM support                            |
-| `target`      | `'node16'` | We dynamically set this. See [Supported Runtimes](#supported-runtimes) |
+| `target`      | `'node18'` | We dynamically set this. See [Supported Runtimes](#supported-runtimes) |
 | `watch`       | N/A        | Cannot be overridden                                                   |
 
 #### Packager Options
@@ -280,6 +282,16 @@ module.exports = (serverless) => {
 ### Automatic compilation
 
 As long as the plugin is properly installed, all regular Serverless operations `sls package`, `sls deploy`, `sls deploy function`, `sls invoke local`, `sls offline` will automatically compile using `serverless-esbuild`.
+
+### Specify a custom entrypoint for a function
+
+You can specify a custom entrypoint for ESBuild by specifying the `esbuildEntrypoint` field in your function definition.
+```typescript
+export const myLambdaFunction = {
+  handler: '/opt/nodejs/node_modules/my_custom_extension/handler.handler',
+  esbuildEntrypoint: './handler.main',
+};
+```
 
 ### Serverless Offline
 
